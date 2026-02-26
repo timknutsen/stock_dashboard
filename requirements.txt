@@ -5,4 +5,5 @@ yfinance
 pandas
 numpy
 python-dotenv
-openai
+anthropic
+flask-caching
