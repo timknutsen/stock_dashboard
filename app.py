@@ -40,7 +40,7 @@ def fetch_stock_data(tickers, period='1y'):
     stock_data = {}
     for ticker in tickers:
         try:
-            stock_data[ticker] = yf.Ticker(ticker).history(period=period)
+            stock_data[ticker] = yf.Ticker(ticker).history(period=period).copy()
         except Exception as e:
             print(f"Error fetching data for {ticker}: {str(e)}")
     return stock_data
@@ -49,7 +49,7 @@ def fetch_stock_data(tickers, period='1y'):
 def fetch_key_indicators(ticker):
     stock = yf.Ticker(ticker)
     indicators = {
-        'Indicator': ['P/E', 'Forward P/E', 'Price/Book', 'Price/Sales', 'Dividend per Share', 'EPS', 'Forward EPS', 'Dividend Yield', 'PEG Ratio'],
+        'Indicator': ['P/E', 'Forward P/E', 'Price/Book', 'Price/Sales', 'Dividend per Share', 'EPS', 'Forward EPS', 'Dividend Yield'],
         'Value': [
             stock.info.get('trailingPE'),
             stock.info.get('forwardPE'),
@@ -59,7 +59,6 @@ def fetch_key_indicators(ticker):
             stock.info.get('trailingEps'),
             stock.info.get('forwardEps'),
             stock.info.get('dividendYield'),
-            stock.info.get('pegRatio')
         ]
     }
     return pd.DataFrame(indicators)
@@ -94,14 +93,24 @@ def fetch_company_news(ticker, days=7):
     start_date = end_date - timedelta(days=days)
     
     news = stock.news
-    
+
+    def in_date_range(item):
+        return start_date <= datetime.fromtimestamp(item['providerPublishTime']) <= end_date
+
+    # Prefer news explicitly tagged with this ticker
     filtered_news = [
         item for item in news
-        if start_date <= datetime.fromtimestamp(item['providerPublishTime']) <= end_date
+        if in_date_range(item)
+        and ticker.upper() in [t.upper() for t in item.get('relatedTickers', [])]
     ]
-    
+
+    # Yahoo's backend sometimes returns general news without matching relatedTickers;
+    # fall back to date-only filter in that case
+    if not filtered_news:
+        filtered_news = [item for item in news if in_date_range(item)]
+
     filtered_news.sort(key=lambda x: x['providerPublishTime'], reverse=True)
-    
+
     return filtered_news[:5]
 
 # Generate GPT analysis
@@ -176,7 +185,6 @@ def get_tooltip(indicator):
         'EPS': "Earnings Per Share: The company's profit divided by the number of outstanding shares of its common stock.",
         'Forward EPS': "Forward Earnings Per Share: The estimated earnings per share based on projections for the next fiscal year.",
         'Dividend Yield': "A financial ratio that shows how much a company pays out in dividends each year relative to its stock price.",
-        'PEG Ratio': "Price/Earnings to Growth ratio: A stock's P/E ratio divided by the growth rate of its earnings for a specified time period."
     }
     return tooltips.get(indicator, "No explanation available.")
 
