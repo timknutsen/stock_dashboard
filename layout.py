@@ -26,7 +26,7 @@ def create_layout():
                                 {"label": "6 Months", "value": "6mo"},
                                 {"label": "3 Months", "value": "3mo"},
                                 {"label": "1 Month",  "value": "1mo"},
-                                {"label": "1 Week",   "value": "1wk"},
+                                {"label": "1 Week",   "value": "5d"},
                             ],
                             value="1y",
                             clearable=False,

@@ -1,5 +1,4 @@
-from datetime import datetime
-
+import anthropic
 import dash
 import dash_bootstrap_components as dbc
 import plotly.express as px
@@ -49,14 +48,21 @@ def register_callbacks(app):
         for ticker in valid:
             if ticker not in stock_data:
                 continue
-            analyses[ticker] = generate_claude_analysis(
-                ticker,
-                fetch_key_indicators(ticker),
-                fetch_company_info(ticker),
-                keywords or "",
-                stock_data[ticker],
-                fetch_company_news(ticker),
-            )
+            try:
+                analyses[ticker] = generate_claude_analysis(
+                    ticker,
+                    fetch_key_indicators(ticker),
+                    fetch_company_info(ticker),
+                    keywords or "",
+                    stock_data[ticker],
+                    fetch_company_news(ticker),
+                )
+            except anthropic.AuthenticationError:
+                return {}, dash.no_update, "Invalid or missing ANTHROPIC_API_KEY."
+            except anthropic.APIError as e:
+                analyses[ticker] = f"_Analysis failed: {e.__class__.__name__}. Try again later._"
+        if not analyses:
+            return {}, dash.no_update, "No data could be fetched for the given tickers."
         return analyses, "claude-analysis", ""
 
     @app.callback(
@@ -78,7 +84,7 @@ def register_callbacks(app):
 
         if active_tab == "key-indicators":
             stock_data = fetch_stock_data(valid, period)
-            return _render_key_indicators(valid, calculate_key_figures(stock_data))
+            return _render_key_indicators(list(stock_data), calculate_key_figures(stock_data))
 
         if active_tab == "stock-performance":
             return _render_stock_performance(fetch_stock_data(valid, period))
@@ -182,10 +188,17 @@ def _render_company_news(valid_tickers):
                     dbc.CardBody([
                         html.H5(item["title"], className="card-title"),
                         html.P(
-                            f"Published: {datetime.fromtimestamp(item['providerPublishTime']).strftime('%Y-%m-%d %H:%M')}",
+                            " · ".join(filter(None, [
+                                item["publisher"],
+                                item["published"].strftime("%Y-%m-%d %H:%M UTC") if item["published"] else None,
+                            ])),
                             className="text-muted small",
                         ),
-                        html.A("Read more", href=item["link"], target="_blank", className="btn btn-primary btn-sm"),
+                        *(
+                            [html.A("Read more", href=item["link"], target="_blank",
+                                    rel="noopener noreferrer", className="btn btn-primary btn-sm")]
+                            if item["link"] else []
+                        ),
                     ]),
                 ], className="mb-3")
                 for item in news

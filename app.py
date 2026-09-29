@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
+
 import dash
 import dash_bootstrap_components as dbc
 
@@ -22,4 +24,4 @@ app.layout = create_layout()
 register_callbacks(app)
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=os.getenv("DASH_DEBUG", "0") == "1")

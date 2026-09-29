@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import anthropic
 import numpy as np
@@ -89,29 +89,60 @@ def calculate_key_figures(stock_data: dict[str, pd.DataFrame]) -> dict:
     return key_figures
 
 
-def fetch_company_news(ticker: str, days: int = 7) -> list[dict]:
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
-    news = yf.Ticker(ticker).news
+def _normalize_news_item(raw: dict) -> dict | None:
+    """Flatten a yfinance news item (nested 'content' format, or the legacy flat one)."""
+    content = raw.get("content") or raw
+    title = content.get("title")
+    if not title:
+        return None
 
-    def in_range(item):
-        return start_date <= datetime.fromtimestamp(item["providerPublishTime"]) <= end_date
+    published = None
+    if content.get("pubDate"):
+        try:
+            published = datetime.fromisoformat(content["pubDate"].replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    elif content.get("providerPublishTime"):
+        published = datetime.fromtimestamp(content["providerPublishTime"], tz=timezone.utc)
 
-    # Prefer articles explicitly tagged with this ticker
-    filtered = [
-        item for item in news
-        if in_range(item)
-        and ticker.upper() in [t.upper() for t in item.get("relatedTickers", [])]
-    ]
-    # Yahoo's backend sometimes omits relatedTickers; fall back to date filter
-    if not filtered:
-        filtered = [item for item in news if in_range(item)]
+    link = (
+        (content.get("clickThroughUrl") or {}).get("url")
+        or (content.get("canonicalUrl") or {}).get("url")
+        or content.get("link")
+    )
+    if not link or not link.startswith(("https://", "http://")):
+        link = None
 
-    filtered.sort(key=lambda x: x["providerPublishTime"], reverse=True)
-    return filtered[:5]
+    provider = content.get("provider")
+    publisher = provider.get("displayName") if isinstance(provider, dict) else content.get("publisher")
+
+    return {"title": title, "published": published, "link": link, "publisher": publisher}
 
 
-_client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+@cache.memoize(timeout=300)
+def fetch_company_news(ticker: str, days: int = 7, limit: int = 5) -> list[dict]:
+    """Recent news for a ticker; returns [] if Yahoo fails or changes format."""
+    try:
+        raw_items = yf.Ticker(ticker).get_news(count=20)
+    except Exception as e:
+        print(f"Error fetching news for {ticker}: {e}")
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    items = [n for n in map(_normalize_news_item, raw_items) if n]
+    recent = [n for n in items if n["published"] is None or n["published"] >= cutoff]
+    recent.sort(key=lambda n: n["published"] or cutoff, reverse=True)
+    return recent[:limit]
+
+
+_client = None
+
+
+def _get_client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    return _client
 
 
 def generate_claude_analysis(
@@ -140,7 +171,7 @@ def generate_claude_analysis(
 
 3. Recent Performance:
 - Price change over the analyzed period: {price_change:.2f}%
-- Annualized volatility: {volatility:.2f}%
+- Annualized volatility: {volatility * 100:.2f}%
 
 4. Recent News Headlines:
 {headlines}
@@ -157,10 +188,10 @@ Provide a concise analysis including:
 
 Use markdown for formatting. Be concise and informative."""
 
-    message = _client.messages.create(
+    message = _get_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2000,
         system="You are a financial analyst with expertise in stock market analysis.",
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return "".join(b.text for b in message.content if b.type == "text")
